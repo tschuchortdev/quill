@@ -10,8 +10,7 @@ import io.getquill.context.{ Context, ContextEffect }
 import io.getquill.util.ContextLogger
 
 trait JdbcContextBase[Dialect <: SqlIdiom, Naming <: NamingStrategy]
-  extends Context[Dialect, Naming]
-  with SqlContext[Dialect, Naming]
+  extends SqlContext[Dialect, Naming]
   with Encoders
   with Decoders {
   private[getquill] val logger = ContextLogger(classOf[JdbcContext[_, _]])
@@ -24,7 +23,8 @@ trait JdbcContextBase[Dialect <: SqlIdiom, Naming <: NamingStrategy]
   import effect._
 
   protected def withConnection[T](f: Connection => Result[T]): Result[T]
-  protected def withConnectionWrapped[T](f: Connection => T): Result[T] =
+
+  final protected def withConnectionWrapped[T](f: Connection => T): Result[T] =
     withConnection(conn => wrap(f(conn)))
 
   def executeAction[T](sql: String, prepare: Prepare = identityPrepare): Result[Long] =
@@ -106,7 +106,7 @@ trait JdbcContextBase[Dialect <: SqlIdiom, Naming <: NamingStrategy]
 
   def prepareBatchAction(groups: List[BatchGroup]): Connection => Result[List[PreparedStatement]] =
     (session: Connection) =>
-      seq {
+      sequence {
         val batches = groups.flatMap {
           case BatchGroup(sql, prepares) =>
             prepares.map(sql -> _)
@@ -119,7 +119,7 @@ trait JdbcContextBase[Dialect <: SqlIdiom, Naming <: NamingStrategy]
       }
 
   protected def handleSingleWrappedResult[T](list: Result[List[T]]): Result[T] =
-    push(list)(handleSingleResult(_))
+    fmap(list)(handleSingleResult)
 
   /**
    * Parses instances of java.sql.Types to string form so it can be used in creation of sql arrays.

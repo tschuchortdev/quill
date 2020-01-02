@@ -22,9 +22,6 @@ class CassandraMonixContext[N <: NamingStrategy](
   extends CassandraClusterSessionContext[N](naming, cluster, keyspace, preparedStatementCacheSize)
   with MonixContext[CqlIdiom, N] {
 
-  // not using this here
-  override val effect = Runner.default
-
   def this(naming: N, config: CassandraContextConfig) = this(naming, config.cluster, config.keyspace, config.preparedStatementCacheSize)
   def this(naming: N, config: Config) = this(naming, CassandraContextConfig(config))
   def this(naming: N, configPrefix: String) = this(naming, LoadConfig(configPrefix))

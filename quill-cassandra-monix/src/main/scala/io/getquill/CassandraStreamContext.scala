@@ -12,6 +12,7 @@ import monix.reactive.Observable
 import scala.collection.JavaConverters._
 import scala.util.{ Failure, Success }
 
+// TODO: Why do we even need this? It's practically identical to CassandraMonixContext and doesn't implement StreamingContext
 class CassandraStreamContext[N <: NamingStrategy](
   naming:                     N,
   cluster:                    Cluster,

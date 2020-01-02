@@ -1,33 +1,25 @@
 package io.getquill.context.ndbc
 
-import java.time.ZoneOffset
-import java.util.Iterator
 import java.util.concurrent.Executors
 import java.util.function.Supplier
 
-import com.typesafe.scalalogging.Logger
-import io.getquill.context.ContextEffect
-import io.getquill.context.sql.SqlContext
+import cats._
+import io.getquill.context.ndbc.NdbcContextBase.ContextEffect
 import io.getquill.context.sql.idiom.SqlIdiom
-import io.getquill.{ NamingStrategy, ReturnAction }
-import io.trane.future.FuturePool
-import io.trane.future.scala.{ Future, toJavaFuture, toScalaFuture }
-import io.trane.ndbc.{ DataSource, PreparedStatement, Row }
-import org.slf4j.LoggerFactory.getLogger
+import io.getquill.{NamingStrategy, ReturnAction}
+import io.getquill.ndbc.TraneFutureConverters._
+import io.trane.future.scala.{Await, Future, Promise, toJavaFuture, toScalaFuture}
+import io.trane.future.{FuturePool, Future => JFuture}
+import io.trane.ndbc.{DataSource, PreparedStatement, Row}
 
-import scala.annotation.tailrec
-import scala.collection.mutable.ArrayBuffer
-import scala.util.Try
+import scala.concurrent.duration.Duration
 
 abstract class NdbcContext[I <: SqlIdiom, N <: NamingStrategy, P <: PreparedStatement, R <: Row](
-  val idiom: I, val naming: N, dataSource: DataSource[P, R]
+  val idiom: I, val naming: N, val dataSource: DataSource[P, R]
 )
-  extends SqlContext[I, N] {
-
-  private val logger = Logger(getLogger(classOf[NdbcContext[_, _, _, _]]))
-
-  override type PrepareRow = P
-  override type ResultRow = R
+  extends NdbcContextBase[I, N, P, R] {
+  // TODO: This is not a TranslateContext. Why?
+  // TODO: I removed some duplicated interfaces everywhere. I hope it doesn't mess with the macros
 
   override type Result[T] = Future[T]
   override type RunQueryResult[T] = List[T]
@@ -37,100 +29,61 @@ abstract class NdbcContext[I <: SqlIdiom, N <: NamingStrategy, P <: PreparedStat
   override type RunBatchActionResult = List[Long]
   override type RunBatchActionReturningResult[T] = List[T]
 
-  protected val effect: ContextEffect[Result]
+  override implicit protected val resultEffect = new NdbcContextBase.ContextEffect[Future] {
+    override def wrap[T](t: => T): Future[T] = Future(t)
 
-  import effect._
-
-  protected val zoneOffset: ZoneOffset = ZoneOffset.UTC
-
-  protected def createPreparedStatement(sql: String): P
-
-  protected def expandAction(sql: String, returningAction: ReturnAction) = sql
-
-  def close() = {
-    dataSource.close()
-    ()
-  }
-
-  def probe(sql: String) = Try(dataSource.query(sql))
-
-  protected def withDataSource[T](f: DataSource[P, R] => T): Result[T] = wrap(f(dataSource))
-
-  def transaction[T](f: => Future[T]): Future[T] = {
-    val pool = FuturePool.apply(Executors.newCachedThreadPool())
-
-    pool.isolate(
-      supplier(
-        withDataSource { ds =>
-          ds.transactional(supplier(f.toJava))
-        }.flatMap(_.toScala).toJava
-      )
-    ).toScala
-  }
-
-  private def supplier[T](future: => io.trane.future.Future[T]) =
-    new Supplier[io.trane.future.Future[T]] {
-      override def get = future
+    override def wrapAsync[T](f: (Complete[T]) => Unit): Future[T] = {
+      val p = Promise[T]()
+      f(p.complete)
+      p.future
     }
 
-  def executeQuery[T](sql: String, prepare: Prepare = identityPrepare, extractor: R => T = identity[R] _): Future[List[T]] = {
-    withDataSource { ds =>
-      val ps = prepare(createPreparedStatement(sql))._2
-      logger.debug(ps.toString())
+    override def fmap[A, B](a: Future[A])(f: A => B): Future[B] = a.map(f)
 
-      ds.query(ps).toScala.map { rs =>
-        extractResult(rs.iterator, extractor)
-      }
-    }.flatMap(result => result)
+    override def flatMap[A, B](a: Future[A])(f: A => Future[B]): Future[B] = a.flatMap(f)
+
+    override def sequence[T](list: List[Future[T]]): Future[List[T]] = Future.sequence(list)
+
+    override def runBlocking[T](eff: Future[T], timeout: Duration): T = Await.result(eff, timeout)
   }
 
-  def executeQuerySingle[T](sql: String, prepare: Prepare = identityPrepare, extractor: R => T = identity[R] _): Future[T] =
-    executeQuery(sql, prepare, extractor).map(handleSingleResult(_))
+  // Need explicit return-type annotations due to scala/bug#8356. Otherwise macro system will not understand Result[Long]=Long etc...
+  override def executeAction[T](sql: String, prepare: Prepare = identityPrepare): Future[Long] =
+    super.executeAction(sql, prepare)
 
-  def executeAction[T](sql: String, prepare: Prepare = identityPrepare): Future[Long] = {
-    withDataSource { ds =>
-      val ps = prepare(createPreparedStatement(sql))._2
-      logger.debug(ps.toString())
+  override def executeQuery[T](sql: String, prepare: Prepare = identityPrepare, extractor: Extractor[T] = identityExtractor): Future[List[T]] =
+    super.executeQuery(sql, prepare, extractor)
 
-      ds.execute(ps).toScala.map(_.longValue)
-    }.flatMap(result => result)
+  override def executeQuerySingle[T](sql: String, prepare: Prepare = identityPrepare, extractor: Extractor[T] = identityExtractor): Future[T] =
+    super.executeQuerySingle(sql, prepare, extractor)
+
+  override def executeActionReturning[O](sql: String, prepare: Prepare = identityPrepare, extractor: Extractor[O], returningBehavior: ReturnAction): Future[O] =
+    super.executeActionReturning(sql, prepare, extractor, returningBehavior)
+
+  override def executeBatchAction(groups: List[BatchGroup]): Future[List[Long]] =
+    super.executeBatchAction(groups)
+
+  override def executeBatchActionReturning[T](groups: List[BatchGroupReturning], extractor: Extractor[T]): Future[List[T]] =
+    super.executeBatchActionReturning(groups, extractor)
+
+  override def withDataSource[T](f: DataSource[P, R] => Future[T]): Future[T] = f(dataSource)
+  /* TODO: I'm assuming that we don't need to bracket and close the dataSource like with JDBC
+      because previously it wasn't done here either */
+
+  // TODO: Is this applicable to NDBC? I could only find uses in the JDBC module
+  def close(): Unit = dataSource.close()
+
+  def transaction[T](f: => Future[T]): Future[T] = {
+    implicit def javaSupplier[S](s: => S): Supplier[S] = new Supplier[S] {
+      override def get = s
+    }
+
+    val javaFuturePool = FuturePool.apply(Executors.newCachedThreadPool())
+
+    javaFuturePool.isolate(
+      withDataSourceWrapped { ds =>
+        ds.transactional(f.toJava).toScala
+      }.toJava
+    ).toScala
   }
-
-  def executeActionReturning[O](sql: String, prepare: Prepare = identityPrepare, extractor: R => O, returningAction: ReturnAction): Future[O] = {
-    val expanded = expandAction(sql, returningAction)
-    executeQuerySingle(expanded, prepare, extractor)
-  }
-
-  def executeBatchAction(groups: List[BatchGroup]): Future[List[Long]] =
-    Future.sequence {
-      groups.map {
-        case BatchGroup(sql, prepare) =>
-          prepare.foldLeft(Future.successful(ArrayBuffer.empty[Long])) {
-            case (acc, prepare) =>
-              acc.flatMap { array =>
-                executeAction(sql, prepare).map(array :+ _)
-              }
-          }
-      }
-    }.map(_.flatten.toList)
-
-  def executeBatchActionReturning[T](groups: List[BatchGroupReturning], extractor: R => T): Future[List[T]] =
-    Future.sequence {
-      groups.map {
-        case BatchGroupReturning(sql, column, prepare) =>
-          prepare.foldLeft(Future.successful(ArrayBuffer.empty[T])) {
-            case (acc, prepare) =>
-              acc.flatMap { array =>
-                executeActionReturning(sql, prepare, extractor, column).map(array :+ _)
-              }
-          }
-      }
-    }.map(_.flatten.toList)
-
-  @tailrec
-  private def extractResult[T](rs: Iterator[R], extractor: R => T, acc: List[T] = Nil): List[T] =
-    if (rs.hasNext)
-      extractResult(rs, extractor, extractor(rs.next()) :: acc)
-    else
-      acc.reverse
 }

@@ -16,11 +16,11 @@ trait ContextEffect[F[_]] {
   /**
    * Map a parameter of the effect. This is really just a functor.
    */
-  def push[A, B](result: F[A])(f: A => B): F[B]
+  def fmap[A, B](result: F[A])(f: A => B): F[B]
 
   /**
    * Aggregate a list of effects into a single effect element. Most effect types
    * used in Quill context easily support this kind of operation e.g. Futures, monix Tasks, Observables, etc...
    */
-  def seq[A, B](f: List[F[A]]): F[List[A]]
+  def sequence[T](f: List[F[T]]): F[List[T]]
 }

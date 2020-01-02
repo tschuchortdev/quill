@@ -14,7 +14,7 @@ trait TranslateContext extends TranslateContextBase {
 
   override private[getquill] val translateEffect: ContextEffect[TranslateResult] = new ContextEffect[TranslateResult] {
     override def wrap[T](t: => T): T = t
-    override def push[A, B](result: A)(f: A => B): B = f(result)
+    override def fmap[A, B](result: A)(f: A => B): B = f(result)
     override def seq[A, B](list: List[A]): List[A] = list
   }
 }
@@ -38,7 +38,7 @@ trait TranslateContextBase {
   def translate(quoted: Quoted[BatchAction[Action[_]]], prettyPrint: Boolean): TranslateResult[List[String]] = macro ActionMacro.translateBatchQueryPrettyPrint
 
   def translateQuery[T](statement: String, prepare: Prepare = identityPrepare, extractor: Extractor[T] = identityExtractor, prettyPrint: Boolean = false): TranslateResult[String] =
-    push(prepareParams(statement, prepare)) { params =>
+    fmap(prepareParams(statement, prepare)) { params =>
       val query =
         if (params.nonEmpty) {
           params.foldLeft(statement) {
@@ -55,7 +55,7 @@ trait TranslateContextBase {
     }
 
   def translateBatchQuery(groups: List[BatchGroup], prettyPrint: Boolean = false): TranslateResult[List[String]] =
-    seq {
+    sequence {
       groups.flatMap { group =>
         group.prepare.map { prepare =>
           translateQuery(group.string, prepare, prettyPrint = prettyPrint)

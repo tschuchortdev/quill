@@ -29,7 +29,7 @@ abstract class JdbcContext[Dialect <: SqlIdiom, Naming <: NamingStrategy]
 
   override protected val effect: ContextEffect[Result] = new ContextEffect[Result] {
     override def wrap[T](t: => T): T = t
-    override def push[A, B](result: A)(f: A => B): B = f(result)
+    override def fmap[A, B](result: A)(f: A => B): B = f(result)
     override def seq[A, B](list: List[A]): List[A] = list
   }
 
@@ -92,9 +92,10 @@ abstract class JdbcContext[Dialect <: SqlIdiom, Naming <: NamingStrategy]
     }
 
   override def performIO[T](io: IO[T, _], transactional: Boolean = false): Result[T] =
-    transactional match {
-      case false => super.performIO(io)
-      case true  => transaction(super.performIO(io))
+    if (transactional) {
+      transaction(super.performIO(io))
+    } else {
+      super.performIO(io)
     }
 
   override private[getquill] def prepareParams(statement: String, prepare: Prepare): Seq[String] = {

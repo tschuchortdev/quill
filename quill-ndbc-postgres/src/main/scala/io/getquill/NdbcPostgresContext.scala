@@ -1,7 +1,8 @@
 package io.getquill
 
-import com.typesafe.config.Config
+import java.time.ZoneOffset
 
+import com.typesafe.config.Config
 import io.getquill.context.ndbc._
 import io.getquill.context.sql.encoding.ArrayEncoding
 import io.getquill.util.LoadConfig
@@ -19,5 +20,5 @@ class NdbcPostgresContext[N <: NamingStrategy](naming: N, dataSource: DataSource
 
   protected def createPreparedStatement(sql: String) = PostgresPreparedStatement.create(sql)
 
-  override protected val effect = NdbcContextEffect
+  override protected val zoneOffset: ZoneOffset = ZoneOffset.UTC
 }

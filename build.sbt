@@ -22,7 +22,7 @@ lazy val dbModules = Seq[sbt.ClasspathDep[sbt.ProjectReference]](
 lazy val asyncModules = Seq[sbt.ClasspathDep[sbt.ProjectReference]](
   `quill-async`, `quill-async-mysql`, `quill-async-postgres`,
   `quill-finagle-mysql`, `quill-finagle-postgres`,
-  `quill-ndbc`, `quill-ndbc-postgres`
+  `quill-ndbc`, `quill-ndbc-postgres`, `quill-ndbc-monix`
 )
 
 lazy val codegenModules = Seq[sbt.ClasspathDep[sbt.ProjectReference]](
@@ -234,8 +234,8 @@ lazy val `quill-monix` =
     .settings(
       fork in Test := true,
       libraryDependencies ++= Seq(
-        "io.monix"                %% "monix-eval"          % "3.0.0",
-        "io.monix"                %% "monix-reactive"      % "3.0.0"
+        "io.monix"                %% "monix-eval"          % "3.1.0",
+        "io.monix"                %% "monix-reactive"      % "3.1.0"
       )
     )
     .dependsOn(`quill-core-jvm` % "compile->compile;test->test")
@@ -260,6 +260,20 @@ lazy val `quill-jdbc-monix` =
     .dependsOn(`quill-monix` % "compile->compile;test->test")
     .dependsOn(`quill-sql-jvm` % "compile->compile;test->test")
     .dependsOn(`quill-jdbc` % "compile->compile;test->test")
+
+lazy val `quill-ndbc-monix` =
+  (project in file("quill-ndbc-monix"))
+    .settings(commonSettings: _*)
+    .settings(mimaSettings: _*)
+    .settings(
+      fork in Test := true,
+      libraryDependencies ++= Seq(
+      )
+    )
+    .dependsOn(`quill-monix` % "compile->compile;test->test")
+    .dependsOn(`quill-sql-jvm` % "compile->compile;test->test")
+    .dependsOn(`quill-ndbc` % "compile->compile;test->test")
+    .dependsOn(`quill-ndbc-postgres` % "compile->compile;test->test")
 
 lazy val `quill-spark` =
   (project in file("quill-spark"))
@@ -546,7 +560,7 @@ def excludePathsIfOracle(paths:Seq[String]) = {
 
 val crossVersions = {
   val scalaVersion = sys.props.get("quill.scala.version")
-  if(scalaVersion.map(_.startsWith("2.13")).getOrElse(false)) {
+  if(scalaVersion.exists(_.startsWith("2.13"))) {
     Seq("2.11.12", "2.12.10", "2.13.1")
   } else {
     Seq("2.11.12", "2.12.10")

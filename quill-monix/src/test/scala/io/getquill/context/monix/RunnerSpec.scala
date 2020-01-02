@@ -37,7 +37,7 @@ class RunnerSpec extends Spec {
     }
 
     "should push an effect correctly" in {
-      push(Task(1))(_ + 1).runSyncUnsafe() should equal(2)
+      fmap(Task(1))(_ + 1).runSyncUnsafe() should equal(2)
     }
 
     "should convert a sequence correctly" in {
