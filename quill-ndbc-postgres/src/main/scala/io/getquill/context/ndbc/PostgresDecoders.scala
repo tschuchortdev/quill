@@ -21,7 +21,7 @@ object Default {
 }
 
 trait PostgresDecoders {
-  this: NdbcContext[_, _, _, PostgresRow] with ArrayEncoding =>
+  this: NdbcContextBase[_, _, _, PostgresRow] with ArrayEncoding =>
 
   type Decoder[T] = BaseDecoder[T]
 

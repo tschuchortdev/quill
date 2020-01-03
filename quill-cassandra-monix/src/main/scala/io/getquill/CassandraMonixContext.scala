@@ -3,7 +3,7 @@ package io.getquill
 import com.datastax.driver.core.{ Cluster, ResultSet, Row }
 import com.typesafe.config.Config
 import io.getquill.context.cassandra.CqlIdiom
-import io.getquill.context.monix.{ MonixContext, Runner }
+import io.getquill.context.monix.MonixContext
 import io.getquill.util.{ ContextLogger, LoadConfig }
 import io.getquill.context.cassandra.util.FutureConversions._
 import monix.eval.Task

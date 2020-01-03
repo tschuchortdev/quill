@@ -15,7 +15,7 @@ trait TranslateContext extends TranslateContextBase {
   override private[getquill] val translateEffect: ContextEffect[TranslateResult] = new ContextEffect[TranslateResult] {
     override def wrap[T](t: => T): T = t
     override def fmap[A, B](result: A)(f: A => B): B = f(result)
-    override def seq[A, B](list: List[A]): List[A] = list
+    override def sequence[T](list: List[T]): List[T] = list
   }
 }
 

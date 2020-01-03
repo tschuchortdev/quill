@@ -1,17 +1,16 @@
 package io.getquill.context.monix
 
-import java.sql.{Array => _}
-import java.util.concurrent.Executors
-import java.util.function.Supplier
+import java.sql.{ Array => _ }
 
+import io.getquill.context.monix.MonixNdbcContext.Runner
 import io.getquill.context.ndbc.NdbcContextBase
 import io.getquill.context.sql.idiom.SqlIdiom
-import io.getquill.util.ContextLogger
-import io.getquill.{NamingStrategy, ReturnAction}
+import io.getquill.ndbc.TraneFutureConverters
 import io.getquill.ndbc.TraneFutureConverters._
-import io.trane.future.scala.{Await, Future, toScalaFuture}
-import io.trane.future.{FuturePool, Future => JFuture}
-import io.trane.ndbc.{DataSource, PreparedStatement, Row}
+import io.getquill.util.ContextLogger
+import io.getquill.{ NamingStrategy, ReturnAction }
+import io.trane.future.scala.Future
+import io.trane.ndbc.{ DataSource, PreparedStatement, Row }
 import monix.eval.Task
 import monix.execution.Scheduler
 import monix.reactive.Observable
@@ -21,15 +20,23 @@ import scala.concurrent.duration.Duration
 
 object MonixNdbcContext {
   trait Runner {
+    // TODO: Docs pls
     def schedule[T](t: Task[T]): Task[T]
     def schedule[T](o: Observable[T]): Observable[T]
   }
 
   object Runner {
+    def default = new Runner {
+      override def schedule[T](t: Task[T]): Task[T] = t
+      override def schedule[T](o: Observable[T]): Observable[T] = o
+    }
+
     def using(scheduler: Scheduler) = new Runner {
       override def schedule[T](t: Task[T]): Task[T] = t.executeOn(scheduler, forceAsync = true)
+
       override def schedule[T](o: Observable[T]): Observable[T] = o.executeOn(scheduler, forceAsync = true)
     }
+  }
 }
 
 /**
@@ -42,6 +49,8 @@ abstract class MonixNdbcContext[Dialect <: SqlIdiom, Naming <: NamingStrategy, P
 ) extends MonixContext[Dialect, Naming]
   with NdbcContextBase[Dialect, Naming, P, R] {
 
+  import runner._
+
   override private[getquill] val logger = ContextLogger(classOf[MonixNdbcContext[_, _, _, _]])
 
   override type RunActionResult = Long
@@ -49,28 +58,41 @@ abstract class MonixNdbcContext[Dialect <: SqlIdiom, Naming <: NamingStrategy, P
   override type RunBatchActionResult = List[Long]
   override type RunBatchActionReturningResult[T] = List[T]
 
-  override implicit protected val resultEffect = new NdbcContextBase.ContextEffect[Task] {
-    override def wrapAsync[T](f: (Complete[T]) => Unit): Task[T] = Task.deferFuture {
-      val p = Promise[T]()
-      f(p.complete)
-      p.future
+  override implicit protected val resultEffect: NdbcContextBase.ContextEffect[Task, Scheduler] =
+    new NdbcContextBase.ContextEffect[Task, Scheduler] {
+      override def wrapAsync[T](f: (Complete[T]) => Unit): Task[T] = Task.deferFuture {
+        val p = Promise[T]()
+        f { complete =>
+          p.complete(complete)
+          ()
+        }
+        p.future
+      }
+
+      override def toFuture[T](eff: Task[T], ec: Scheduler): Future[T] = {
+        TraneFutureConverters.scalaToTraneScala(eff.runToFuture(ec))(ec)
+      }
+
+      override def fromDeferredFuture[T](f: Scheduler => Future[T]): Task[T] = Task.deferFutureAction(f(_))
+
+      override def flatMap[A, B](a: Task[A])(f: A => Task[B]): Task[B] = a.flatMap(f)
+
+      override def runBlocking[T](eff: Task[T], timeout: Duration): T = {
+        import monix.execution.Scheduler.Implicits.global
+        eff.runSyncUnsafe(timeout)
+      }
+
+      override def wrap[T](t: => T): Task[T] = Task.apply(t)
+
+      override def fmap[A, B](fa: Task[A])(f: A => B): Task[B] = fa.map(f)
+
+      override def sequence[T](f: List[Task[T]]): Task[List[T]] = Task.sequence(f)
     }
 
-    override def flatMap[A, B](a: Task[A])(f: A => Task[B]): Task[B] = a.flatMap(f)
-
-    override def runBlocking[T](eff: Task[T], timeout: Duration): T = {
-      import monix.execution.Scheduler.Implicits.global
-      eff.runSyncUnsafe(timeout)
-    }
-
-    override def wrap[T](t: => T): Task[T] = Task.apply(t)
-
-    override def fmap[A, B](fa: Task[A])(f: A => B): Task[B] = fa.map(f)
-
-    override def sequence[T](f: List[Task[T]]): Task[List[T]] = Task.sequence(f)
+  def close(): Unit = {
+    dataSource.close()
+    ()
   }
-
-  import runner._
 
   // Need explicit return-type annotations due to scala/bug#8356. Otherwise macro system will not understand Result[Long]=Task[Long] etc...
   override def executeAction[T](sql: String, prepare: Prepare = identityPrepare): Task[Long] =
@@ -91,7 +113,7 @@ abstract class MonixNdbcContext[Dialect <: SqlIdiom, Naming <: NamingStrategy, P
   override def executeBatchActionReturning[T](groups: List[BatchGroupReturning], extractor: Extractor[T]): Task[List[T]] =
     super.executeBatchActionReturning(groups, extractor)
 
-  override def close(): Unit = dataSource.close()
+  override def transaction[T](f: => Task[T]): Task[T] = super.transaction(f)
 
   override protected def withDataSource[T](f: DataSource[P, R] => Task[T]): Task[T] =
     schedule(f(dataSource))
@@ -101,25 +123,6 @@ abstract class MonixNdbcContext[Dialect <: SqlIdiom, Naming <: NamingStrategy, P
 
   protected def withDataSourceObservable[T](f: DataSource[P, R] => Observable[T]): Observable[T] =
     schedule(f(dataSource))
-
-  /* TODO: I'm assuming that we don't need to turn autocommit off/on for streaming because I can't
-        find any way to do so with the NDBC DataSource and it seems to handle streaming on its own */
-
-  def transaction[T](f: => Task[T]): Task[T] = withDataSource { ds =>
-    implicit def javaSupplier[S](s: => S): Supplier[S] = new Supplier[S] {
-      override def get = s
-    }
-
-    val javaFuturePool = FuturePool.apply(Executors.newCachedThreadPool())
-
-    Task.deferFutureAction(implicit scheduler =>
-      javaFuturePool.isolate(
-        ds.transactional {
-          f.runToFuture: JFuture[T]
-        }
-      )
-    )
-  }
 
   def streamQuery[T](fetchSize: Option[Index], sql: String, prepare: Prepare = identityPrepare, extractor: Extractor[T] = identityExtractor): Observable[T] =
     Observable

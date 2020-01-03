@@ -1,17 +1,17 @@
 package io.getquill.context.monix
 
 import java.io.Closeable
-import java.sql.{Array => _, _}
+import java.sql.{ Array => _, _ }
 
 import cats.effect.ExitCase
-import io.getquill.{NamingStrategy, ReturnAction}
-import io.getquill.context.{ContextEffect, StreamingContext}
+import io.getquill.{ NamingStrategy, ReturnAction }
+import io.getquill.context.{ ContextEffect, StreamingContext }
 import io.getquill.context.jdbc.JdbcContextBase
 import io.getquill.context.monix.MonixJdbcContext.Runner
 import io.getquill.context.sql.idiom.SqlIdiom
 import io.getquill.util.ContextLogger
 import javax.sql.DataSource
-import monix.eval.{Task, TaskLocal}
+import monix.eval.{ Task, TaskLocal }
 import monix.execution.Scheduler
 import monix.execution.misc.Local
 import monix.reactive.Observable

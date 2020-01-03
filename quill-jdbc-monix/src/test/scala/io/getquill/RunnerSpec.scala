@@ -1,5 +1,6 @@
 package io.getquill.context.monix
 
+import io.getquill.context.monix.MonixJdbcContext.Runner
 import io.getquill.Spec
 import monix.eval.Task
 import monix.execution.Scheduler
@@ -41,7 +42,7 @@ class RunnerSpec extends Spec {
     }
 
     "should convert a sequence correctly" in {
-      seq(List(Task(1), Task(2), Task(3))).runSyncUnsafe() should equal(List(1, 2, 3))
+      sequence(List(Task(1), Task(2), Task(3))).runSyncUnsafe() should equal(List(1, 2, 3))
     }
 
     "plain schedule should be a no-op" in {

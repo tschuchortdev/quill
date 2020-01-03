@@ -2,11 +2,11 @@ package io.getquill.context.jdbc
 
 import java.sql._
 
-import io.getquill._
 import io.getquill.ReturnAction._
+import io.getquill._
+import io.getquill.context.ContextEffect
 import io.getquill.context.sql.SqlContext
 import io.getquill.context.sql.idiom.SqlIdiom
-import io.getquill.context.{ Context, ContextEffect }
 import io.getquill.util.ContextLogger
 
 trait JdbcContextBase[Dialect <: SqlIdiom, Naming <: NamingStrategy]

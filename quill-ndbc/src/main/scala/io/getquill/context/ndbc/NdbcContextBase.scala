@@ -1,28 +1,37 @@
 package io.getquill.context.ndbc
 
 import java.util
+import java.util.concurrent.Executors
+import java.util.function.Supplier
 
-import cats._
-import cats.effect.Async
-import cats.implicits._
 import io.getquill._
-import io.getquill.context.ContextEffect
-import io.getquill.context.ndbc.NdbcContextBase.ContextEffect
 import io.getquill.context.sql.SqlContext
 import io.getquill.context.sql.idiom.SqlIdiom
+import io.getquill.ndbc.TraneFutureConverters._
 import io.getquill.util.ContextLogger
-import io.trane.future.scala.{Await, Future, toScalaFuture}
-import io.trane.ndbc.{DataSource, PreparedStatement, Row}
+import io.trane.future.FuturePool
+import io.trane.future.scala.{ Future, toScalaFuture }
+import io.trane.ndbc.{ DataSource, PreparedStatement, Row }
 
 import scala.annotation.tailrec
 import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.duration.Duration
-import scala.util.{Failure, Success, Try}
+import scala.language.{ higherKinds, implicitConversions }
+import scala.util.Try
 
 object NdbcContextBase {
-  trait ContextEffect[F[_]] extends context.ContextEffect[F] {
+  trait ContextEffect[F[_], FutureExecutionContext_] extends context.ContextEffect[F] {
     final type Complete[T] = (Try[T] => Unit)
+
+    final type FutureExecutionContext = FutureExecutionContext_
+
     def wrapAsync[T](f: Complete[T] => Unit): F[T]
+
+    def fromFuture[T](fut: Future[T]): F[T] = wrapAsync(fut.onComplete)
+
+    def toFuture[T](eff: F[T], ec: this.FutureExecutionContext): Future[T]
+
+    def fromDeferredFuture[T](f: (this.FutureExecutionContext) => Future[T]): F[T]
 
     def flatMap[A, B](a: F[A])(f: A => F[B]): F[B]
     def traverse[A, B](list: List[A])(f: A => F[B]) = sequence(list.map(f))
@@ -41,19 +50,14 @@ trait NdbcContextBase[Idiom <: SqlIdiom, Naming <: NamingStrategy, P <: Prepared
   final override type PrepareRow = P
   final override type ResultRow = R
 
-  protected implicit val resultEffect: NdbcContextBase.ContextEffect[Result]
+  protected implicit val resultEffect: NdbcContextBase.ContextEffect[Result, _]
   import resultEffect._
-
 
   // TODO: Why not just make the dataSource a member variable?
   protected def withDataSource[T](f: DataSource[P, R] => Result[T]): Result[T]
 
   final protected def withDataSourceWrapped[T](f: DataSource[P, R] => Future[T]): Result[T] =
-    withDataSource { ds =>
-      wrapAsync { complete: =>
-        f(ds).onComplete(complete)
-      }
-    }
+    withDataSource { ds => resultEffect.fromFuture(f(ds)) }
 
   protected def createPreparedStatement(sql: String): P
 
@@ -89,7 +93,8 @@ trait NdbcContextBase[Idiom <: SqlIdiom, Naming <: NamingStrategy, P <: Prepared
 
   def executeBatchAction(groups: List[BatchGroup]): Result[List[Long]] =
     fmap(
-      traverse(groups) { case BatchGroup(sql, prepares) =>
+      traverse(groups) {
+        case BatchGroup(sql, prepares) =>
           prepares.foldLeft(wrap(ArrayBuffer.empty[Long])) { (acc, prepare) =>
             flatMap(acc) { array =>
               fmap(executeAction(sql, prepare))(array :+ _)
@@ -104,7 +109,8 @@ trait NdbcContextBase[Idiom <: SqlIdiom, Naming <: NamingStrategy, P <: Prepared
 
   def executeBatchActionReturning[T](groups: List[BatchGroupReturning], extractor: R => T): Result[List[T]] =
     fmap(
-      traverse(groups) { case BatchGroupReturning(sql, column, prepare) =>
+      traverse(groups) {
+        case BatchGroupReturning(sql, column, prepare) =>
           prepare.foldLeft(wrap(ArrayBuffer.empty[T])) { (acc, prepare) =>
             flatMap(acc) { array =>
               fmap(executeActionReturning(sql, prepare, extractor, column))(array :+ _)
@@ -119,4 +125,22 @@ trait NdbcContextBase[Idiom <: SqlIdiom, Naming <: NamingStrategy, P <: Prepared
       extractResult(rs, extractor, extractor(rs.next()) :: acc)
     else
       acc.reverse
+
+  def transaction[T](f: => Result[T]): Result[T] = withDataSource { ds =>
+    /* TODO: I'm assuming that we don't need to turn autocommit off/on for streaming because I can't
+        find any way to do so with the NDBC DataSource and it seems to handle streaming on its own */
+
+    implicit def javaSupplier[S](s: => S): Supplier[S] = new Supplier[S] {
+      override def get = s
+    }
+
+    val javaFuturePool = FuturePool.apply(Executors.newCachedThreadPool())
+
+    resultEffect.fromDeferredFuture(implicit scheduler =>
+      javaFuturePool.isolate(
+        ds.transactional {
+          resultEffect.toFuture(f, scheduler).toJava
+        }
+      ))
+  }
 }

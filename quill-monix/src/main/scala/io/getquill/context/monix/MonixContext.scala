@@ -1,7 +1,7 @@
 package io.getquill.context.monix
 
-import io.getquill.{NamingStrategy, idiom}
-import io.getquill.context.{Context, StreamingContext}
+import io.getquill.{ NamingStrategy, idiom }
+import io.getquill.context.{ Context, StreamingContext }
 import monix.eval.Task
 import monix.reactive.Observable
 
