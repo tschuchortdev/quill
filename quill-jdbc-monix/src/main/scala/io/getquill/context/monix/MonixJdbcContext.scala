@@ -27,7 +27,6 @@ abstract class MonixJdbcContext[Dialect <: SqlIdiom, Naming <: NamingStrategy](
   runner:     Runner
 ) extends MonixContext[Dialect, Naming]
   with JdbcContextBase[Dialect, Naming]
-  with StreamingContext[Dialect, Naming]
   with MonixTranslateContext {
 
   override private[getquill] val logger = ContextLogger(classOf[MonixJdbcContext[_, _]])
