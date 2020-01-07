@@ -124,6 +124,7 @@ abstract class MonixNdbcContext[Dialect <: SqlIdiom, Naming <: NamingStrategy, P
   protected def withDataSourceObservable[T](f: DataSource[P, R] => Observable[T]): Observable[T] =
     schedule(f(dataSource))
 
+  // TODO: What about fetchSize? Not really applicable here
   def streamQuery[T](fetchSize: Option[Index], sql: String, prepare: Prepare = identityPrepare, extractor: Extractor[T] = identityExtractor): Observable[T] =
     Observable
       .eval {

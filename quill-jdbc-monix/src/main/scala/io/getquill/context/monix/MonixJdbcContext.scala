@@ -5,7 +5,7 @@ import java.sql.{ Array => _, _ }
 
 import cats.effect.ExitCase
 import io.getquill.{ NamingStrategy, ReturnAction }
-import io.getquill.context.{ ContextEffect, StreamingContext }
+import io.getquill.context.ContextEffect
 import io.getquill.context.jdbc.JdbcContextBase
 import io.getquill.context.monix.MonixJdbcContext.Runner
 import io.getquill.context.sql.idiom.SqlIdiom
